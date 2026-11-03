@@ -32,7 +32,7 @@
 
     appName: "REC Livestock & Agro Farms",
     motto: "Growing Excellence, Feeding the Future.",
-    location: "Abia, Nigeria",
+    location: "Lagos, Nigeria",
     phone: "+234 813 504 2997",
     phoneRaw: "+2348135042997",
     whatsapp: "+2347071850599",
@@ -443,7 +443,7 @@
     phone: "+234 813 504 2997",
     whatsapp: "+2347071850599",
     email: "reclivestockagrofarms@gmail.com",
-    address: "Abia, Nigeria",
+    address: "Lagos, Nigeria",
     delivery_note: "We deliver across all 36 states of Nigeria and the FCT.",
     website: "",
     logo_url: "",
@@ -612,10 +612,11 @@
       stock_quantity: p.stock_quantity != null ? Number(p.stock_quantity) : null,
       minimum_order_quantity: Number(p.minimum_order_quantity || 1),
       online_orderable: p.online_orderable !== false,
+      availability_status: p.availability_status || "in_stock",
       active: p.active !== false,
       featured: !!p.featured,
-      in_stock: p.stock_quantity == null || Number(p.stock_quantity) > 0,
-      low_stock: p.stock_quantity != null && Number(p.stock_quantity) > 0 && Number(p.stock_quantity) <= 10,
+      in_stock: p.availability_status !== "sold_out" && (p.stock_quantity == null || Number(p.stock_quantity) > 0),
+      low_stock: p.availability_status !== "sold_out" && p.stock_quantity != null && Number(p.stock_quantity) > 0 && Number(p.stock_quantity) <= 10,
     };
   }
 
@@ -1159,9 +1160,14 @@
       const { data, error } = result;
 
       if (error) {
-        // Fall back to local record if write fails (network / RLS) so nobody
-        // loses their order silently — but surface the issue in console.
         console.error("Order insert failed:", error.message);
+        const ruleMessages = /Insufficient stock|only available at the farm|is sold out|Minimum order|is not available|Delivery is not available|delivery state is required|delivery address is required|pickup station|Invalid fulfillment|at least one item|Invalid item quantity|Order line/i;
+        if (ruleMessages.test(error.message || "")) {
+          throw new Error(error.message);
+        }
+        // Keep a local record for network/server failures so the reference
+        // can still be sent to WhatsApp, but do not pretend a rejected order
+        // was accepted.
         const stored = { ...orderPayload, order_number: reference, status: "pending", payment_status: "unpaid", created_at: new Date().toISOString() };
         const history = JSON.parse(localStorage.getItem("rec_orders") || "[]");
         history.unshift(stored);
@@ -1238,6 +1244,7 @@
   const esc = UI.esc;
 
   const stockLabel = (p) => {
+    if (p.availability_status === "sold_out") return { text: "Sold out", cls: "out" };
     if (!p.in_stock) return { text: "Out of stock", cls: "out" };
     if (p.low_stock) return { text: "Low stock", cls: "low" };
     return { text: "In stock", cls: "" };
@@ -1834,6 +1841,7 @@
   let shown = PAGE_SIZE;
   let activeFilters = {
     category: null,
+    breed: "",
     availability: "all", // all | in | out
     priceMax: null,
     featured: false,
@@ -1852,10 +1860,10 @@
     activeFilters.featured = params.get("featured") === "1";
     const cref = params.get("category");
     if (cref) activeFilters.category = cref;
+    activeFilters.breed = params.get("breed") || "";
 
     const qEl = $("#shop_search");
     if (qEl) qEl.value = activeFilters.search;
-    const count = $("#results_count");
 
     const [products, categories] = await Promise.all([
       REC.products.getProducts({ active: true }),
@@ -1864,6 +1872,7 @@
     allProducts = products;
     cats = categories;
     buildCategoryFilters();
+    buildBreedFilters();
     applyFilters();
   }
 
@@ -1911,6 +1920,37 @@
     });
   }
 
+  function buildBreedFilters() {
+    const breeds = Array.from(
+      new Set(
+        allProducts
+          .map((p) => (p.breed || "").trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    const hosts = [$("#filter_breed"), $("#filter_breed_m")].filter(Boolean);
+    hosts.forEach((host) => {
+      host.innerHTML =
+        '<option value="">All breeds / types</option>' +
+        breeds.map((b) => '<option value="' + UI.esc(b) + '">' + UI.esc(b) + "</option>").join("");
+      if (activeFilters.breed && !breeds.includes(activeFilters.breed)) {
+        activeFilters.breed = "";
+      }
+      host.value = activeFilters.breed;
+      if (!host.dataset.bound) {
+        host.dataset.bound = "1";
+        host.addEventListener("change", () => {
+          activeFilters.breed = host.value;
+          const other = host.id === "filter_breed" ? $("#filter_breed_m") : $("#filter_breed");
+          if (other) other.value = activeFilters.breed;
+          applyFilters();
+        });
+      }
+      const group = host.closest(".filter-group");
+      if (group) group.style.display = breeds.length ? "" : "none";
+    });
+  }
+
   function applyFilters() {
     let list = allProducts.slice();
     if (activeFilters.search) {
@@ -1918,7 +1958,10 @@
       list = list.filter(
         (p) =>
           p.name.toLowerCase().includes(s) ||
-          (p.description || "").toLowerCase().includes(s)
+          (p.description || "").toLowerCase().includes(s) ||
+          (p.breed || "").toLowerCase().includes(s) ||
+          (p.unit || "").toLowerCase().includes(s) ||
+          (p.category_name || "").toLowerCase().includes(s)
       );
     }
     if (activeFilters.category) {
@@ -1927,6 +1970,9 @@
           p.category_slug === activeFilters.category ||
           String(p.category_id) === activeFilters.category
       );
+    }
+    if (activeFilters.breed) {
+      list = list.filter((p) => (p.breed || "").trim() === activeFilters.breed);
     }
     if (activeFilters.availability === "in") list = list.filter((p) => p.in_stock);
     if (activeFilters.availability === "out") list = list.filter((p) => !p.in_stock);
@@ -2025,10 +2071,12 @@
       $("#filter_reset").addEventListener("click", (e) => {
         e.preventDefault();
         activeFilters = {
-          category: null, availability: "all", priceMax: null,
+          category: null, breed: "", availability: "all", priceMax: null,
           featured: false, search: "", sort: activeFilters.sort,
         };
         $("#price_max") && ($("#price_max").value = 0);
+        $("#filter_breed") && ($("#filter_breed").value = "");
+        $("#filter_breed_m") && ($("#filter_breed_m").value = "");
         $("#shop_search").value = "";
         $("#sort_select") && ($("#sort_select").value = "newest");
         ["availability_in", "availability_out", "only_featured"].forEach((id) => {
@@ -2222,7 +2270,10 @@
     // Stock badge
     const stockEl = $("#pd_stock");
     if (stockEl) {
-      if (p.in_stock) {
+      if (p.availability_status === "sold_out") {
+        stockEl.className = "badge badge-red";
+        stockEl.textContent = "Sold out";
+      } else if (p.in_stock) {
         stockEl.className = "badge badge-green";
         stockEl.textContent = p.low_stock ? "Low stock — order soon" : "In stock";
       } else {
@@ -3195,26 +3246,36 @@
     if (sel) sel.addEventListener('change', showPickupDetails);
   }
 
-  async function stateFee(state) {
+  async function stateFee(state, lga) {
     if (!state) return DEFAULT_FEE;
     try {
       const zones = await REC.products.getDeliveryZones(state);
       if (zones && zones.length) {
-        return Number(zones[0].delivery_fee || 0);
+        const exact = lga ? zones.find((z) => z.lga === lga) : null;
+        const statewide = zones.find((z) => !z.lga);
+        const zone = exact || statewide || zones[0];
+        return Number(zone.delivery_fee || 0);
       }
     } catch (e) {}
     // Nationwide default (no configured zone yet) — keep transparent.
     return DEFAULT_FEE;
   }
 
-  async function bindFee() {
+  async function refreshFee() {
+    const state = $('#state') ? $('#state').value : "";
+    const lga = $('#lga') ? $('#lga').value : "";
+    updateTotals(await stateFee(state, lga));
+  }
+
+  function bindFee() {
     const sel = $('#state');
     if (!sel) return;
     sel.addEventListener('change', async () => {
       buildLgas(sel.value);
-      const fee = await stateFee(sel.value);
-      updateTotals(fee);
+      await refreshFee();
     });
+    const lga = $('#lga');
+    if (lga) lga.addEventListener('change', refreshFee);
   }
 
   function updateTotals(_fee) {
@@ -3347,7 +3408,8 @@
       try {
         const isPickup = REC.checkoutMethod === 'pickup';
         const state = $('#state').value;
-        const fee = isPickup ? 0 : await stateFee(state);
+        const lgaValue = $('#lga').value.trim();
+        const fee = isPickup ? 0 : await stateFee(state, lgaValue);
         const subtotal = REC.cart.subtotal();
         const psSelect = $('#pickup_station');
         const psOption = psSelect && psSelect.value ? psSelect.options[psSelect.selectedIndex] : null;
@@ -3357,7 +3419,7 @@
           email: $('#email').value.trim() || null,
           fulfillment_method: isPickup ? 'pickup' : 'delivery',
           state: isPickup ? null : state,
-          lga: isPickup ? null : $('#lga').value.trim(),
+          lga: isPickup ? null : lgaValue,
           delivery_address: isPickup ? null : $('#delivery_address').value.trim(),
           pickup_station_id: psOption ? Number(psOption.value) : null,
           pickup_station_name: psOption ? psOption.getAttribute('data-name') : null,
@@ -3628,6 +3690,8 @@
           UI.toast("Please fill your name and phone.", "error");
           return null;
         }
+        const breed = $("#q_breed").value.trim();
+        const notes = $("#q_requirements").value.trim();
         return {
           name,
           phone,
@@ -3637,7 +3701,7 @@
           quantity: Number($("#q_quantity").value || 1),
           preferred_date: $("#q_date").value || null,
           location: $("#q_location").value.trim() || null,
-          requirements: $("#q_requirements").value.trim() || null,
+          requirements: [breed ? "Breed / type: " + breed : "", notes].filter(Boolean).join("\n") || null,
           source: "quote",
         };
       },
@@ -3888,6 +3952,7 @@
       '<div style="display:flex;gap:.7rem;flex-wrap:wrap;margin-top:1.2rem">' +
       '<button type="button" class="btn btn-outline btn-sm" id="signout_btn">Sign Out</button>' +
       "</div>" +
+      '<h4 style="margin:1.8rem 0 .6rem">Notices</h4><div id="profile_notices"></div>' +
       '<h4 style="margin:1.8rem 0 .6rem">Your Orders</h4><div id="profile_orders"></div>';
 
     $("#signout_btn").addEventListener("click", async () => {
@@ -3900,7 +3965,41 @@
       }
     });
 
+    loadNotices(user);
     loadOrders(user);
+  }
+
+  async function loadNotices(user) {
+    const host = $("#profile_notices");
+    if (!host) return;
+    const sb = REC.orders.sb();
+    if (!sb) return;
+    try {
+      const { data, error } = await sb
+        .from("notifications")
+        .select("id, title, body, link, read, created_at")
+        .eq("audience", "customer")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (error) throw error;
+      const rows = data || [];
+      if (!rows.length) {
+        host.innerHTML = '<p style="font-size:.9rem;color:var(--muted)">No notices yet. Order updates will appear here.</p>';
+        return;
+      }
+      host.innerHTML = rows
+        .map(
+          (n) =>
+            '<div class="sum-row" style="align-items:flex-start;gap:1rem">' +
+            '<span><strong>' + UI.esc(n.title || "Notice") + "</strong>" +
+            (n.body ? '<br><span style="font-size:.85rem;color:var(--muted)">' + UI.esc(n.body) + "</span>" : "") +
+            '</span><span style="white-space:nowrap;font-size:.8rem;color:var(--muted)">' + UI.formatDate(n.created_at) + "</span></div>"
+        )
+        .join("");
+    } catch (err) {
+      host.innerHTML = "";
+    }
   }
 
   async function loadOrders(user) {
@@ -3918,10 +4017,10 @@
       if (custRow) {
         const { data, error } = await sb
           .from("orders")
-          .select("order_number, status, payment_status, total, email, created_at, items")
+          .select("order_number, status, payment_status, subtotal, delivery_fee, total, email, created_at, items, fulfillment_method, delivery_address, state, lga, pickup_station_name, pickup_station_address, notes")
           .eq("customer_id", custRow.id)
           .order("created_at", { ascending: false })
-          .limit(10);
+          .limit(25);
         if (error) throw error;
         orders = data || [];
       }
@@ -3952,6 +4051,35 @@
         const [cls, label] = statusMap[o.status] || ["bg-gray", o.status || "Pending"];
         const pay = o.payment_status === "paid" ? '<span class="badge badge-green">Paid</span>' : '<span class="badge badge-gold">' + UI.esc(o.payment_status || "unpaid") + "</span>";
         const unpaid = o.payment_status !== "paid";
+        const items = Array.isArray(o.items) ? o.items : [];
+        const itemCount = items.reduce((n, i) => n + Number(i.quantity || 0), 0);
+        const itemRows = items
+          .map((i) => {
+            const unit = Number(i.unit_price != null ? i.unit_price : i.price || 0);
+            const line = Number(i.subtotal != null ? i.subtotal : unit * Number(i.quantity || 0));
+            return (
+              '<div class="sum-row"><span>' + UI.esc(i.name || "Item") + " × " + Number(i.quantity || 0) +
+              '</span><span>' + UI.money(line) + "</span></div>"
+            );
+          })
+          .join("");
+        const fulfilment =
+          o.fulfillment_method === "pickup"
+            ? '<div class="sum-row"><span>Pickup</span><span>' + UI.esc([o.pickup_station_name, o.pickup_station_address].filter(Boolean).join(" — ") || "Selected station") + "</span></div>"
+            : '<div class="sum-row"><span>Delivery</span><span>' + UI.esc([o.delivery_address, o.lga, o.state].filter(Boolean).join(", ") || "Address confirmed") + "</span></div>";
+        const details =
+          '<details style="margin-top:.3rem">' +
+          '<summary style="cursor:pointer;font-weight:700;color:var(--rec-green)">View order details</summary>' +
+          '<div style="margin-top:.5rem">' +
+          (itemRows || '<div class="sum-row"><span>Items</span><span>—</span></div>') +
+          '<div class="sum-row"><span>Subtotal</span><span>' + UI.money(o.subtotal != null ? o.subtotal : o.total) + "</span></div>" +
+          (Number(o.delivery_fee || 0) > 0
+            ? '<div class="sum-row"><span>Delivery fee</span><span>' + UI.money(o.delivery_fee) + "</span></div>"
+            : "") +
+          fulfilment +
+          (o.notes ? '<div class="sum-row"><span>Notes</span><span>' + UI.esc(o.notes) + "</span></div>" : "") +
+          '<div class="sum-row"><span>Total</span><span>' + UI.money(o.total) + "</span></div>" +
+          "</div></details>";
         const actions =
           REC.paystack && REC.paystack.enabled() && unpaid
             ? '<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.7rem">' +
@@ -3967,7 +4095,9 @@
           '<span class="badge ' + cls + '">' + UI.esc(label) + "</span>" +
           "</div>" +
           '<div class="sum-row"><span>Placed</span><span>' + UI.formatDate(o.created_at) + "</span></div>" +
-          '<div class="sum-row"><span>Total</span><span>' + UI.money(o.total) + "</span></div>" +
+          (itemCount ? '<div class="sum-row"><span>Items</span><span>' + itemCount + "</span></div>" : "") +
+          details +
+          '<div class="sum-row" style="margin-top:.6rem;border-top:1px solid var(--line);padding-top:.6rem"><span>Total</span><span>' + UI.money(o.total) + "</span></div>" +
           '<div class="sum-row"><span>Payment</span><span>' + pay + "</span></div>" +
           actions +
           "</div>"
@@ -6172,16 +6302,21 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
     },
 
     async load() {
-      const { data, error } = await sb().from("products").select("id,name,stock_quantity,price,unit,active").order("name");
-      if (error) return ADMIN.toast(error.message, "error");
-      this.state.rows = data || [];
+      const [prodRes, invRes] = await Promise.all([
+        sb().from("products").select("id,name,stock_quantity,price,unit,active").order("name"),
+        sb().from("inventory").select("product_id,min_stock"),
+      ]);
+      if (prodRes.error) return ADMIN.toast(prodRes.error.message, "error");
+      const minMap = {};
+      (invRes.data || []).forEach((i) => { minMap[i.product_id] = i.min_stock != null ? Number(i.min_stock) : 5; });
+      this.state.rows = (prodRes.data || []).map((p) => ({ ...p, min_stock: minMap[p.id] != null ? minMap[p.id] : 5 }));
       this.render();
     },
 
     render() {
       const host = document.getElementById("inv_list");
       let list = this.state.rows;
-      if (this.state.filter === "low") list = list.filter((r) => r.stock_quantity <= 5 && r.stock_quantity > 0);
+      if (this.state.filter === "low") list = list.filter((r) => r.stock_quantity > 0 && r.stock_quantity <= r.min_stock);
       if (this.state.filter === "out") list = list.filter((r) => r.stock_quantity <= 0);
       const s = this.state.search.trim().toLowerCase();
       if (s) list = list.filter((r) => r.name.toLowerCase().includes(s));
@@ -6192,16 +6327,17 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       }
       host.innerHTML =
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        "<th>Product</th><th>Unit</th><th>In Stock</th><th>Status</th><th>Adjustment</th>" +
+        "<th>Product</th><th>Unit</th><th>In Stock</th><th>Min</th><th>Status</th><th>Adjustment</th>" +
         "</tr></thead><tbody>" +
         list
           .map((r) => {
-            const st = r.stock_quantity <= 0 ? ['badge-red', "Out of stock"] : r.stock_quantity <= 5 ? ['badge-gold', "Low stock"] : ['badge-green', "In stock"];
+            const st = r.stock_quantity <= 0 ? ['badge-red', "Out of stock"] : r.stock_quantity <= r.min_stock ? ['badge-gold', "Low stock"] : ['badge-green', "In stock"];
             return (
               "<tr>" +
               '<td class="t-strong">' + ADMIN.esc(r.name) + "</td>" +
               "<td>" + ADMIN.esc(r.unit || "each") + "</td>" +
               '<td class="t-strong">' + r.stock_quantity + "</td>" +
+              "<td>" + r.min_stock + "</td>" +
               '<td><span class="badge ' + st[0] + '">' + st[1] + "</span></td>" +
               "<td><div style=\"display:flex;gap:.3rem;align-items:center\">" +
               '<input class="input" id="inv_qty_' + r.id + '" type="number" value="' + r.stock_quantity + '" style="width:70px;padding:.4rem .5rem"/>' +
@@ -6219,13 +6355,25 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       const id = btn.getAttribute("data-save");
       const qty = Number(document.getElementById("inv_qty_" + id).value);
       if (isNaN(qty) || qty < 0) return ADMIN.toast("Enter a valid quantity", "error");
+      const reason = window.prompt("Reason for this stock adjustment:", "Manual stock adjustment");
+      if (reason === null) return;
       try {
-        const { error } = await sb().from("products").update({ stock_quantity: qty }).eq("id", id);
+        const { data, error } = await sb().rpc("adjust_stock", {
+          p_product_id: id,
+          p_new_quantity: qty,
+          p_reason: reason.trim() || "Manual stock adjustment",
+        });
         if (error) throw error;
-        ADMIN.toast("Stock updated", "success");
+        ADMIN.toast(Number(data) === qty ? "Stock updated" : "Stock unchanged", "success");
         await this.load();
       } catch (err) {
-        ADMIN.toast(err.message || "Update failed", "error");
+        const msg = err.message || "Update failed";
+        ADMIN.toast(
+          /adjust_stock|schema cache|does not exist/i.test(msg)
+            ? "Inventory adjustment is not installed. Run supabase/update-order-integrity.sql."
+            : msg,
+          "error"
+        );
       }
     },
   };
@@ -7592,10 +7740,11 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         '<div class="modal-sec"><h4>Items</h4>' +
         "<div class=\"table-wrap\"><table class=\"data-table\"><thead><tr><th>Product</th><th>Qty</th><th>Price</th><th>Subtotal</th></tr></thead><tbody>" +
         items
-          .map(
-            (i) =>
-              "<tr><td>" + ADMIN.esc(i.name) + "</td><td>" + i.quantity + "</td><td>" + ADMIN.money(i.price) + "</td><td>" + ADMIN.money(i.price * i.quantity) + "</td></tr>"
-          )
+          .map((i) => {
+            const unitPrice = Number(i.unit_price != null ? i.unit_price : i.price || 0);
+            const lineTotal = Number(i.subtotal != null ? i.subtotal : unitPrice * i.quantity);
+            return "<tr><td>" + ADMIN.esc(i.name) + "</td><td>" + i.quantity + "</td><td>" + ADMIN.money(unitPrice) + "</td><td>" + ADMIN.money(lineTotal) + "</td></tr>";
+          })
           .join("") +
         "</tbody></table></div>" +
         '<p style="margin-top:.8rem;font-weight:800">Subtotal: ' + ADMIN.money(order.subtotal) + "<br/>Delivery: " + ADMIN.money(order.delivery_fee) + '</p>' +

@@ -9,6 +9,7 @@
   <link rel="icon" href="../assets/logo/rec-logo.jpg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap"/>
     <link rel="stylesheet" href="../css/style.css?v=2026-10-12.4">
 </head>
 <body>
@@ -55,6 +56,24 @@
                   <div class="field">
                     <label for="q_quantity">Quantity</label>
                     <input class="input" id="q_quantity" type="number" min="1" step="1" value="1"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_breed">Breed / type</label>
+                    <input class="input" id="q_breed" list="q_breed_list" placeholder="e.g. Cobb 500, Red Sokoto"/>
+                    <datalist id="q_breed_list">
+                      <option value="Arbor Acres"></option>
+                      <option value="Cobb 500"></option>
+                      <option value="Ross 308"></option>
+                      <option value="Hubbard Classic"></option>
+                      <option value="Hubbard Flex"></option>
+                      <option value="Hubbard F15"></option>
+                      <option value="Anak Titan"></option>
+                      <option value="Isa Brown"></option>
+                      <option value="Red Sokoto"></option>
+                      <option value="Turkey (Broad-breasted White)"></option>
+                      <option value="Israel Fowl"></option>
+                      <option value="Local (Free-range)"></option>
+                    </datalist>
                   </div>
                   <div class="field">
                     <label for="q_date">Preferred date</label>

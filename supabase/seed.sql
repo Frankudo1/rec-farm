@@ -80,7 +80,7 @@ insert into public.site_settings
    social_facebook, social_instagram, social_tiktok,
    whatsapp_channel, whatsapp_group, telegram_channel, telegram_group)
 values (1, 'REC Livestock & Agro Farms Enterprises', 'Growing Excellence, Feeding the Future.',
-        '+234 813 504 2997', '+2347071850599', 'reclivestockagrofarms@gmail.com', 'Abia, Nigeria',
+        '+234 813 504 2997', '+2347071850599', 'reclivestockagrofarms@gmail.com', 'Lagos, Nigeria',
         'We deliver across all 36 states of Nigeria and the FCT.',
         'https://www.facebook.com/share/1D56jsdGSk/', 'https://www.instagram.com/recfarms1864',
         'https://www.tiktok.com/@rec.livestock.agr',

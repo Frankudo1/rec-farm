@@ -106,6 +106,8 @@ rec-livestock/                # <- repo root, deploy this directory as-is
 | 8 | `update-remove-sample-testimonials.sql` | Drops seeded testimonials |
 | 9 | `update-ops-access.sql` | RLS for the bulk/farm-visit/quotation/ops pages |
 | 10 | `update-security-hardening.sql` | Pins `search_path`, closes internal RPCs, trims storage listing |
+| 11 | `update-order-integrity.sql` | Server-side totals, stock reservation, customer notifications |
+| 12 | `update-business-location.sql` | Corrects the public business address to Lagos |
 
 ### Path convention
 
@@ -153,7 +155,7 @@ Open http://localhost:8080 — the site runs immediately using demo data.
 2. Open **SQL Editor** and run the migrations from `supabase/` **in the order
    listed above** — starting with `schema.sql` (tables, indexes, RLS, triggers,
    storage bucket `rec-media`) and finishing with
-   `update-security-hardening.sql`.
+   `update-business-location.sql`.
 3. Optional: run `supabase/seed.sql` to load sample products, categories, zones,
    a site-settings row and sample blog posts. Delete sample rows before going live.
 4. The site reads its keys directly from `js/app.js` — the Supabase URL and
@@ -266,7 +268,7 @@ Work through this before announcing the site. Items marked **required** will bre
 a feature if skipped.
 
 **Supabase — database**
-- [ ] Run all migrations in order (`schema.sql` → `update-security-hardening.sql`)
+- [ ] Run all migrations in order (`schema.sql` → `update-business-location.sql`)
 - [ ] **required** Promote the first account to `owner` (see *Create your first owner*)
 - [ ] **required** Re-run **Advisors → Security**; confirm the hardening advisories are cleared
 - [ ] Delete any `seed.sql` sample products, categories, blog posts and testimonials

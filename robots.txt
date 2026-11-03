@@ -4,4 +4,4 @@ Allow: /
 # Admin area is restricted
 Disallow: /rule/
 
-Sitemap: https://rec-farms.com/sitemap.xml    
+Sitemap: https://rec-farms.com/sitemap.xml

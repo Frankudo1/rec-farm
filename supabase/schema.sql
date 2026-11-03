@@ -235,7 +235,7 @@ create table if not exists public.site_settings (
   phone text default '+234 813 504 2997',
   whatsapp text default '+2347071850599',
   email text default 'reclivestockagrofarms@gmail.com',
-  address text default 'Abia, Nigeria',
+  address text default 'Lagos, Nigeria',
   delivery_note text default 'We deliver across all 36 states of Nigeria and the FCT.',
   logo_url text,
   hero_image text,
@@ -533,6 +533,7 @@ declare
   qty int;
   new_stock int;
   new_batch uuid;
+  product_name text;
 begin
   if new.items is not null and jsonb_array_length(new.items) > 0 then
     for it in select jsonb_array_elements(new.items) loop
@@ -542,10 +543,16 @@ begin
       qty := coalesce((it->>'quantity')::int, 0);
       if qty > 0 then
         update public.products
-          set stock_quantity = greatest(0, stock_quantity - qty),
+          set stock_quantity = stock_quantity - qty,
               updated_at = now()
           where id = pid
+            and stock_quantity >= qty
           returning stock_quantity into new_stock;
+        if not found then
+          select name into product_name from public.products where id = pid;
+          raise exception 'Insufficient stock for %', coalesce(product_name, pid::text)
+            using errcode = 'check_violation';
+        end if;
         select id into new_batch
           from public.product_batches
           where product_id = pid
@@ -582,18 +589,31 @@ security definer
 set search_path = public
 as $$
 declare
-  it       jsonb;
-  new_it   jsonb;
-  items    jsonb := '[]'::jsonb;
-  pid      uuid;
-  qty      int;
-  price    numeric(12,2);
-  line     numeric(12,2);
-  subtotal numeric(12,2) := 0;
+  it               jsonb;
+  new_it           jsonb;
+  items            jsonb := '[]'::jsonb;
+  pid              uuid;
+  qty              int;
+  price            numeric(12,2);
+  line             numeric(12,2);
+  subtotal         numeric(12,2) := 0;
+  product_name     text;
+  is_active        boolean;
+  is_online        boolean;
+  availability     text;
+  moq              int;
+  method           text := coalesce(new.fulfillment_method, 'delivery');
+  station_name     text;
+  station_address  text;
+  zone_fee         numeric(12,2);
 begin
   if new.items is null or jsonb_typeof(new.items) <> 'array'
      or jsonb_array_length(new.items) = 0 then
     raise exception 'Order must contain at least one item';
+  end if;
+
+  if method not in ('delivery', 'pickup') then
+    raise exception 'Invalid fulfillment method';
   end if;
 
   for it in select jsonb_array_elements(new.items) loop
@@ -610,9 +630,30 @@ begin
       raise exception 'Order line is missing a valid product';
     end if;
 
-    select p.price into price from public.products p where p.id = pid;
-    if price is null then
+    select p.price,
+           p.name,
+           p.active,
+           p.online_orderable,
+           coalesce(p.availability_status, 'in_stock'),
+           greatest(coalesce(p.minimum_order_quantity, 1), 1)
+      into price, product_name, is_active, is_online, availability, moq
+      from public.products p
+      where p.id = pid;
+
+    if not found then
       raise exception 'Order line references an unknown product';
+    end if;
+    if not is_active then
+      raise exception 'Product % is not available', product_name;
+    end if;
+    if not is_online then
+      raise exception 'Product % is only available at the farm', product_name;
+    end if;
+    if availability = 'sold_out' then
+      raise exception 'Product % is sold out', product_name;
+    end if;
+    if qty < moq then
+      raise exception 'Minimum order for % is %', product_name, moq;
     end if;
 
     line := price * qty;
@@ -623,10 +664,51 @@ begin
 
   new.items := items;
   new.subtotal := subtotal;
-  if new.delivery_fee is null or new.delivery_fee < 0 then
+
+  if method = 'pickup' then
+    if new.pickup_station_id is null then
+      raise exception 'A pickup station is required';
+    end if;
+    select s.name, s.address
+      into station_name, station_address
+      from public.pickup_stations s
+      where s.id = new.pickup_station_id
+        and s.active = true;
+    if not found then
+      raise exception 'The selected pickup station is unavailable';
+    end if;
+    new.pickup_station_name := station_name;
+    new.pickup_station_address := station_address;
+    new.state := null;
+    new.lga := null;
+    new.delivery_address := null;
     new.delivery_fee := 0;
+  else
+    if btrim(coalesce(new.state, '')) = '' then
+      raise exception 'A delivery state is required';
+    end if;
+    if length(btrim(coalesce(new.delivery_address, ''))) < 5 then
+      raise exception 'A delivery address is required';
+    end if;
+    select z.delivery_fee
+      into zone_fee
+      from public.delivery_zones z
+      where z.active = true
+        and z.state = new.state
+        and (z.lga is null or z.lga = '' or z.lga = new.lga)
+      order by (z.lga is not null and z.lga <> '') desc, z.id
+      limit 1;
+    if not found then
+      raise exception 'Delivery is not available to % yet', new.state;
+    end if;
+    new.delivery_fee := zone_fee;
+    new.pickup_station_id := null;
+    new.pickup_station_name := null;
+    new.pickup_station_address := null;
   end if;
-  new.total := subtotal + new.delivery_fee;
+
+  new.fulfillment_method := method;
+  new.total := subtotal + coalesce(new.delivery_fee, 0);
   return new;
 end;
 $$;
@@ -853,6 +935,13 @@ create policy "orders_insert_checkout" on public.orders
     and paid_at is null
     and payment_reference is null
     and coalesce(amount_paid, 0) = 0
+    and (
+      customer_id is null
+      or exists (
+        select 1 from public.customers c
+        where c.id = orders.customer_id and c.user_id = auth.uid()
+      )
+    )
   );
 
 drop policy if exists "orders_select_own_or_admin" on public.orders;

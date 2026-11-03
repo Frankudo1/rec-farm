@@ -9,6 +9,7 @@
   <link rel="icon" href="../assets/logo/rec-logo.jpg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap"/>
     <link rel="stylesheet" href="../css/style.css?v=2026-10-12.4">
 </head>
 <body>
@@ -37,6 +38,14 @@
             <div class="filter-group">
               <h4>Categories</h4>
               <div id="filter_categories"></div>
+            </div>
+
+            <!-- Breed -->
+            <div class="filter-group">
+              <h4>Breed / Type</h4>
+              <select class="select" id="filter_breed" aria-label="Filter by breed">
+                <option value="">All breeds / types</option>
+              </select>
             </div>
 
             <!-- Price -->
@@ -121,6 +130,12 @@
       </div>
       <div id="filter_categories_mobile"></div>
       <!-- The mobile drawer reuses sidebar markup; simple approach: clone filters -->
+      <div class="filter-group">
+        <h4>Breed / Type</h4>
+        <select class="select" id="filter_breed_m" aria-label="Filter by breed">
+          <option value="">All breeds / types</option>
+        </select>
+      </div>
       <div class="filter-group">
         <h4>Maximum Price</h4>
         <input type="range" id="price_max_m" min="0" max="200000" step="500" value="0"/>
